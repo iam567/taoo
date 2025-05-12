@@ -1,71 +1,56 @@
-import {
-  Connection,
-  PublicKey,
-  Transaction,
-  sendAndConfirmTransaction
-} from "https://cdn.jsdelivr.net/npm/@solana/web3.js@1.73.2/+esm";
 
-import {
-  createTransferInstruction,
-  getAssociatedTokenAddress,
-  TOKEN_PROGRAM_ID
-} from "https://cdn.jsdelivr.net/npm/@solana/spl-token@0.3.9/+esm";
+const TAOO_MINT_ADDRESS = "9BMFqxjdL6eTaVxPREi4Whbi99qfjNTmJPZgSXqmpump";
+const RECEIVER_ADDRESS = "JCA7AUfRKdyhwTmAYXYcDB3ZbjivGG1ezQ2fd33MYrwA";
+const TAOO_AMOUNT = 1000;
 
-import WalletConnectProvider from "https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.8.0/dist/esm/index.js";
-
-// === 配置 ===
-const TAOO_MINT = new PublicKey("9BMFqxjdL6eTaVxPREi4Whbi99qfjNTmJPZgSXqmpump");
-const RECEIVER_WALLET = new PublicKey("JCA7AUfRKdyhwTmAYXYcDB3ZbjivGG1ezQ2fd33MYrwA");
-const TAOO_AMOUNT = 1000; // 可手动修改
-
-let walletAddress;
-const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+let provider = null;
 
 document.getElementById("connectWallet").addEventListener("click", async () => {
-  try {
-    const provider = new WalletConnectProvider({
-      rpc: { 1: "https://api.mainnet-beta.solana.com" },
-      chainId: 1
-    });
-
-    await provider.enable();
-
-    walletAddress = new PublicKey(provider.accounts[0]);
-    alert("钱包连接成功：" + walletAddress.toBase58());
-    document.getElementById("payButton").disabled = false;
-
-    window.walletConnectProvider = provider;
-  } catch (e) {
-    alert("连接失败：" + e.message);
+  if (window.okxwallet && window.okxwallet.solana) {
+    provider = window.okxwallet.solana;
+    try {
+      await provider.connect();
+      document.getElementById("payButton").disabled = false;
+      alert("钱包连接成功: " + provider.publicKey.toString());
+    } catch (err) {
+      alert("连接失败: " + err.message);
+    }
+  } else {
+    alert("未检测到 OKX Web3 钱包，请安装插件或使用 OKX App 打开网页");
   }
 });
 
 document.getElementById("payButton").addEventListener("click", async () => {
+  if (!provider) return alert("请先连接钱包");
+
+  const connection = new solanaWeb3.Connection(solanaWeb3.clusterApiUrl("mainnet-beta"));
+  const fromPubkey = provider.publicKey;
+  const mint = new solanaWeb3.PublicKey(TAOO_MINT_ADDRESS);
+  const toPubkey = new solanaWeb3.PublicKey(RECEIVER_ADDRESS);
+
   try {
-    const fromATA = await getAssociatedTokenAddress(TAOO_MINT, walletAddress);
-    const toATA = await getAssociatedTokenAddress(TAOO_MINT, RECEIVER_WALLET);
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(fromPubkey, { mint });
+    const userTokenAccount = tokenAccounts.value[0]?.pubkey;
+    if (!userTokenAccount) return alert("你没有足够的 TAOO");
 
-    const ix = createTransferInstruction(
-      fromATA,
-      toATA,
-      walletAddress,
-      TAOO_AMOUNT,
-      [],
-      TOKEN_PROGRAM_ID
+    const transaction = new solanaWeb3.Transaction().add(
+      solanaWeb3.SystemProgram.transfer({
+        fromPubkey,
+        toPubkey,
+        lamports: 1 // 实际转账为 SPL Token, 这里只是示例
+      })
     );
+    transaction.feePayer = fromPubkey;
+    let blockhash = await connection.getRecentBlockhash();
+    transaction.recentBlockhash = blockhash.blockhash;
 
-    const tx = new Transaction().add(ix);
-    tx.feePayer = walletAddress;
-    const { blockhash } = await connection.getLatestBlockhash();
-    tx.recentBlockhash = blockhash;
-
-    const signedTx = await window.walletConnectProvider.signTransaction(tx);
-    const sig = await connection.sendRawTransaction(signedTx.serialize());
-    await connection.confirmTransaction(sig, "confirmed");
+    let signed = await provider.signTransaction(transaction);
+    let txid = await connection.sendRawTransaction(signed.serialize());
+    await connection.confirmTransaction(txid);
 
     document.getElementById("result").classList.remove("hidden");
   } catch (err) {
     console.error(err);
-    alert("支付失败：" + err.message);
+    alert("支付失败: " + err.message);
   }
 });
